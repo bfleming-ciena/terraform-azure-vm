@@ -1,24 +1,62 @@
 
-Example usage:
+# Example usage:
+
+########################################################################
+# Resource Groups
+#
+# This is the top level. Manage it separately.
+resource "azurerm_resource_group" "example" {
+  name     = "example"
+  location = "eastus"
+}
+
+resource "azurerm_availability_set" "example_aset" {
+  name                = "example_aset"
+  location            = "eastus"
+  resource_group_name = "${azurerm_resource_group.example.name}"
+  managed             = true
+}
+
+########################################################################
+# Subnets
+#
+resource "azurerm_subnet" "example-subnet" {
+  name                 = "example-subnet"
+  virtual_network_name = "${azurerm_virtual_network.example-vnet.name}"
+  resource_group_name  = "${azurerm_resource_group.example.name}"
+  address_prefix       = "10.0.0.0/21"
+  service_endpoints = ["Microsoft.Storage", "Microsoft.Sql"]
+}
+
+#########################################################################
+# Networks
+#
+resource "azurerm_virtual_network" "example-vnet" {
+  name                = "example-vnet"
+  location            = "eastus"
+  address_space       = ["10.0.0.0/21"]
+  resource_group_name = "${azurerm_resource_group.example.name}"
+}
 
 ####################################################################################################
 # COMPUTE
 #
 # 
-module "AZW1WSQLDW" {
+module "example_vm" {
   source              = "git@github.com:stonefury/terraform-azure-vm.git//"
   vm_size             = "Standard_E32-16s_v3"
-  resource_group_name = "${element("${local.workspace_lists["it_apps_resource_groups"]}", var.SQL_INDEX)}"           # apps-sqlapps
-  location            = "${local.workspace["location"]}"
-  vm_hostname         = "AZW1WSQLDW${upper(substr(terraform.workspace,0,1))}1"
-  admin_password      = "${local.workspace["windows_admin_password"]}"
+  resource_group_name = "${azurerm_resource_group.example.name}"
+  location            = "eastus"
+  vm_hostname         = "examplevm"
+  admin_password      = "adminfree123@"
   vm_os_simple        = "WindowsServer"
 
-  vnet_subnet_id       = "${data.terraform_remote_state.network.it_apps_subnets[var.SQL_INDEX]}" # apps-sqlapps
+  vnet_subnet_id       = "${azurerm_subnet.example-subnet.id}"
   remote_port          = "3389"
-  public_ip            = "true"
-  public_ip_dns        = ["azw1wsqldw"]
+  # public_ip            = "true"
+  # public_ip_dns        = ["azw1wsqldw"]
   storage_account_type = "Standard_LRS"
+  availability_set_id = "${azurerm_availability_set.example_aset.id}"
 
   data_disk_spec = [
     {
@@ -84,35 +122,46 @@ module "AZW1WSQLDW" {
   vm_os_sku                     = "Enterprise"
   vm_os_version                 = "13.1.900310"
   delete_os_disk_on_termination = "true"
-
-  tags = {
-    terraform = "true"
-
-    Environment = "${terraform.workspace}"
-
-    Service = "SQL"
-  }
-
-  availability_set_id = "${azurerm_availability_set.SQLAPPS.id}"
 }
 
-resource "azurerm_virtual_machine_extension" "AZW1WSQLDW_sql_extension" {
-  depends_on           = ["module.AZW1WSQLDW"]
+resource "azurerm_virtual_machine_extension" "example_sql_extension" {
+  # depends_on           = ["module.example_vm"]
   name                 = "SqlIaasExtension"
-  location             = "${local.workspace["location"]}"
-  resource_group_name  = "${element("${local.workspace_lists["it_apps_resource_groups"]}", var.SQL_INDEX)}"
-  virtual_machine_name = "${module.AZW1WSQLDW.hostname}"
+  location             = "eastus"
+  resource_group_name  = "${azurerm_resource_group.example.name}"
+  virtual_machine_name = "${module.example_vm.vm_hostname[0]}"
   publisher            = "Microsoft.SqlServer.Management"
   type                 = "SqlIaaSAgent"
   type_handler_version = "1.2"
 
-  settings = "${local.default_sql_extension}"
-
-  tags = {
-    terraform = "true"
-
-    Environment = "${terraform.workspace}"
-
-    Service = "SQL"
-  }
+  settings = <<SETTINGS
+      {
+        "AutoTelemetrySettings": {
+          "Region": "eastus"
+        },
+        "AutoPatchingSettings": {
+          "PatchCategory": "WindowsMandatoryUpdates",
+          "Enable": true,
+          "DayOfWeek": "Sunday",
+          "MaintenanceWindowStartingHour": "2",
+          "MaintenanceWindowDuration": "60"
+        },
+        "KeyVaultCredentialSettings": {
+          "Enable": false,
+          "CredentialName": ""
+        },
+        "ServerConfigurationsManagementSettings": {
+          "SQLConnectivityUpdateSettings": {
+              "ConnectivityType": "Private",
+              "Port": "1433"
+          },
+          "SQLWorkloadTypeUpdateSettings": {
+              "SQLWorkloadType": "GENERAL"
+          },
+          "AdditionalFeaturesServerConfigurations": {
+              "IsRServicesEnabled": "false"
+          }
+        }
+      }
+    SETTINGS
 }
